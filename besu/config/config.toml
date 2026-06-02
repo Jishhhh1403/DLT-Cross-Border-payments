@@ -1,0 +1,13 @@
+data-path="/opt/besu/data"
+genesis-file="/genesis/genesis-ibft.json"
+
+p2p-host="0.0.0.0"
+p2p-port=30303
+max-peers=25
+
+sync-mode="FULL"
+
+miner-enabled=true
+miner-coinbase="0x4ae59705f16a16cf075366115f75a8fee8d4915d"
+
+logging="INFO"

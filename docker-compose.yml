@@ -1,0 +1,70 @@
+# Institutional Tokenized Deposit Settlement POC
+# Single-validator Besu + Python settlement orchestrator
+#
+# Start:  docker compose up --build
+# API:    http://localhost:8000/docs
+# Besu:   http://localhost:8545
+
+services:
+  besu:
+    image: hyperledger/besu:24.12.2
+    container_name: besu-validator
+    user: root
+    ports:
+      - "8545:8545"   # JSON-RPC HTTP
+      - "8546:8546"   # JSON-RPC WebSocket
+      - "30303:30303" # P2P
+    volumes:
+      - ./besu/genesis:/genesis:ro
+      - ./besu/config:/config:ro
+      - besu-data:/opt/besu/data
+    command:
+      - --genesis-file=/genesis/genesis-ibft.json
+      - --config-file=/config/config.toml
+      - --data-path=/opt/besu/data
+      - --rpc-http-enabled=true
+      - --rpc-http-api=ETH,NET,WEB3,IBFT,TXPOOL,DEBUG,TRACE
+      - --rpc-http-host=0.0.0.0
+      - --rpc-http-port=8545
+      - --rpc-http-cors-origins=*
+      - --rpc-ws-enabled=true
+      - --rpc-ws-api=ETH,NET,WEB3,IBFT,TXPOOL
+      - --rpc-ws-host=0.0.0.0
+      - --rpc-ws-port=8546
+      - --host-allowlist=*
+      - --min-gas-price=0
+      - --node-private-key-file=/config/keys/validator.key
+    networks:
+      - settlement-net
+
+  settlement-api:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: settlement-api
+    ports:
+      - "8000:8000"
+    environment:
+      BESU_RPC_URL: http://besu:8545
+      CHAIN_ID: "1337"
+      # Bank operator key — DEV ONLY, never use in production
+      BANK_PRIVATE_KEY: "0x1111111111111111111111111111111111111111111111111111111111111111"
+      ALICE_ONCHAIN_ADDRESS: "0x1563915e194D8CfBA1943570603F7606A3115508"
+      BOB_ONCHAIN_ADDRESS: "0x5CbDd86a2FA8Dc4bDdd8a8f69dBa48572EeC07FB"
+      CONTRACT_ADDRESS_FILE: /app/deployed/contract_address.txt
+      ALICE_PRIVATE_KEY: "0x2222222222222222222222222222222222222222222222222222222222222222"
+    volumes:
+      - ./deployed:/app/deployed
+      - ./contracts:/app/contracts:ro
+    depends_on:
+      - besu
+    restart: on-failure
+    networks:
+      - settlement-net
+
+volumes:
+  besu-data:
+
+networks:
+  settlement-net:
+    driver: bridge

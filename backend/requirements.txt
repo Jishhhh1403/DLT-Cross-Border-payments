@@ -1,0 +1,8 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+web3==7.6.0
+pydantic==2.10.3
+pydantic-settings==2.6.1
+py-solc-x==2.0.3
+eth-account==0.13.4
+httpx==0.28.1

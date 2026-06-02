@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.env
+.venv/
+venv/
+deployed/contract_address.txt
+besu-data/
+*.egg-info/
+.pytest_cache/
