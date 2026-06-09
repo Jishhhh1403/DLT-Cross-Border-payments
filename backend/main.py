@@ -4,10 +4,12 @@ FastAPI settlement API — institutional tokenized deposit POC.
 Endpoints mirror a production payment orchestration service:
   reserve -> mint -> transfer -> redeem
 
-Each endpoint requires an `Idempotency-Key` header for Saga safety.
+An `Idempotency-Key` header can be provided for Saga safety.
+If omitted, a UUID is auto-generated per request.
 """
 
 from contextlib import asynccontextmanager
+from uuid import uuid4
 
 from fastapi import FastAPI, Header, HTTPException
 
@@ -51,6 +53,10 @@ def _orch() -> SettlementOrchestrator:
     return orchestrator
 
 
+def _resolve_key(req, header: str | None) -> str:
+    return header or req.idempotency_key or str(uuid4())
+
+
 @app.get("/health")
 def health():
     return {
@@ -65,9 +71,9 @@ def health():
 @app.post("/reserve")
 def reserve(
     req: ReserveRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    req.idempotency_key = idempotency_key
+    req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
         return _orch().reserve(req)
     except ValueError as e:
@@ -77,9 +83,9 @@ def reserve(
 @app.post("/mint")
 def mint(
     req: MintRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    req.idempotency_key = idempotency_key
+    req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
         return _orch().mint(req)
     except ValueError as e:
@@ -89,9 +95,9 @@ def mint(
 @app.post("/transfer")
 def transfer(
     req: TransferRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    req.idempotency_key = idempotency_key
+    req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
         return _orch().transfer(req)
     except Exception as e:
@@ -101,9 +107,9 @@ def transfer(
 @app.post("/redeem")
 def redeem(
     req: RedeemRequest,
-    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ):
-    req.idempotency_key = idempotency_key
+    req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
         return _orch().redeem(req)
     except Exception as e:

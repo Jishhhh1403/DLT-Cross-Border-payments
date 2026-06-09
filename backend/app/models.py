@@ -30,26 +30,26 @@ class TransactionRecord(BaseModel):
 class ReserveRequest(BaseModel):
     client_id: str = Field(..., description="Institutional client, e.g. ALICE")
     amount: int = Field(..., gt=0, description="Fiat amount in cents")
-    idempotency_key: str = Field(..., description="Unique idempotency key for this operation")
+    idempotency_key: str = Field("", description="Overrides Idempotency-Key header if provided")
 
 
 class MintRequest(BaseModel):
     client_id: str = Field(..., description="Client whose reserved fiat is tokenized")
     amount: int = Field(..., gt=0, description="Token amount in cents (1:1 with reserved fiat)")
-    idempotency_key: str = Field(..., description="Unique idempotency key for this operation")
+    idempotency_key: str = Field("", description="Overrides Idempotency-Key header if provided")
 
 
 class TransferRequest(BaseModel):
     from_client_id: str = Field(..., description="Sender, e.g. ALICE")
     to_client_id: str = Field(..., description="Receiver, e.g. BOB")
     amount: int = Field(..., gt=0, description="Token amount in cents")
-    idempotency_key: str = Field(..., description="Unique idempotency key for this operation")
+    idempotency_key: str = Field("", description="Overrides Idempotency-Key header if provided")
 
 
 class RedeemRequest(BaseModel):
     client_id: str = Field(..., description="Client redeeming tokens to fiat")
     amount: int = Field(..., gt=0, description="Token amount to burn and credit as fiat")
-    idempotency_key: str = Field(..., description="Unique idempotency key for this operation")
+    idempotency_key: str = Field("", description="Overrides Idempotency-Key header if provided")
 
 
 class FiatAccountState(BaseModel):
