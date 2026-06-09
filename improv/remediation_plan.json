@@ -1,0 +1,50 @@
+{
+  "plan_name": "Architectural Remediation — Tokenized Deposit POC",
+  "objective": "Address critical architectural and security flaws: atomic settlement via Saga pattern, smart contract RBAC + pausable, secret management, and structured documentation.",
+  "phases": {
+    "phase_1_structured_plan": {
+      "status": "completed",
+      "tasks": [
+        { "id": "1.1", "description": "Create improv/remediation_plan.json", "file": "improv/remediation_plan.json", "status": "completed" }
+      ]
+    },
+    "phase_2_smart_contract_security": {
+      "status": "completed",
+      "depends_on": ["phase_1_structured_plan"],
+      "tasks": [
+        { "id": "2.1", "description": "Initialize npm package with @openzeppelin/contracts dependency", "files": ["contracts/package.json", "contracts/node_modules/"], "status": "completed" },
+        { "id": "2.2", "description": "Refactor DepositToken.sol: AccessControl + Pausable", "file": "contracts/DepositToken.sol", "status": "completed" },
+        { "id": "2.3", "description": "Update compile_contract.py with include-path for @openzeppelin", "file": "scripts/compile_contract.py", "status": "completed" },
+        { "id": "2.4", "description": "Recompile contract and refactor client.py to read ABI from JSON artifact", "files": ["backend/app/blockchain/client.py", "contracts/build/DepositToken.json"], "status": "completed" },
+        { "id": "2.5", "description": "Update deploy_contract.py to grant roles post-deployment", "file": "scripts/deploy_contract.py", "status": "completed" }
+      ]
+    },
+    "phase_3_settlement_atomicity_saga": {
+      "status": "completed",
+      "depends_on": ["phase_2_smart_contract_security"],
+      "tasks": [
+        { "id": "3.1", "description": "Add TransactionRecord, TransactionStatus, idempotency_key to request models", "file": "backend/app/models.py", "status": "completed" },
+        { "id": "3.2", "description": "Add transaction registry and compensation methods to FiatLedger", "file": "backend/app/fiat_ledger.py", "status": "completed" },
+        { "id": "3.3", "description": "Implement Saga orchestrator in settlement.py: mint/redeem/transfer with rollback", "file": "backend/app/settlement.py", "status": "completed" },
+        { "id": "3.4", "description": "Update main.py for Idempotency-Key header handling", "file": "backend/main.py", "status": "completed" }
+      ]
+    },
+    "phase_4_infrastructure_security": {
+      "status": "completed",
+      "depends_on": [],
+      "tasks": [
+        { "id": "4.1", "description": "Remove hardcoded secrets from docker-compose.yml, add env_file", "file": "docker-compose.yml", "status": "completed" },
+        { "id": "4.2", "description": "Create .env.example, update config.py to drop default secrets", "files": [".env.example", "backend/app/config.py"], "status": "completed" },
+        { "id": "4.3", "description": "Update .gitignore for validator.key, node_modules, build artifacts", "file": ".gitignore", "status": "completed" }
+      ]
+    },
+    "phase_5_verification": {
+      "status": "completed",
+      "depends_on": ["phase_2_smart_contract_security", "phase_3_settlement_atomicity_saga", "phase_4_infrastructure_security"],
+      "tasks": [
+        { "id": "5.1", "description": "Write pytest tests for Saga, idempotency, fiat ledger compensation", "files": ["tests/test_fiat_ledger.py", "tests/test_settlement.py"], "status": "completed" },
+        { "id": "5.2", "description": "Verify compilation, lint, and all tests pass", "status": "completed" }
+      ]
+    }
+  }
+}

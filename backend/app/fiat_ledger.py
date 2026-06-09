@@ -1,5 +1,5 @@
 """
-Off-chain fiat treasury ledger (in-memory for POC).
+Off-chain fiat treasury ledger with transaction registry for Saga idempotency.
 
 Institutional parallel:
 - Core banking / general ledger holds real money
@@ -8,7 +8,7 @@ Institutional parallel:
 
 from dataclasses import dataclass, field
 
-from backend.app.models import FiatAccountState
+from backend.app.models import FiatAccountState, TransactionRecord, TransactionStatus
 
 
 @dataclass
@@ -19,14 +19,15 @@ class FiatAccount:
 
 
 class FiatLedger:
-    """Simulates bank treasury balances with available vs reserved buckets."""
+    """Simulates bank treasury balances with available vs reserved buckets and transaction registry."""
 
     def __init__(self) -> None:
         self._accounts: dict[str, FiatAccount] = {
-            "ALICE": FiatAccount(client_id="ALICE", available=100_000, reserved=0),  # $1000.00
+            "ALICE": FiatAccount(client_id="ALICE", available=100_000, reserved=0),
             "BOB": FiatAccount(client_id="BOB", available=0, reserved=0),
         }
         self._history: list[dict] = []
+        self._transactions: dict[str, TransactionRecord] = {}
 
     def snapshot(self) -> list[FiatAccountState]:
         return [
@@ -55,6 +56,18 @@ class FiatLedger:
         acct.reserved += amount
         self._record("RESERVE", client_id, amount)
 
+    def unreserve(self, client_id: str, amount: int) -> None:
+        """Compensation: move reserved fiat back to available."""
+        acct = self.get(client_id)
+        if acct.reserved < amount:
+            raise ValueError(
+                f"Insufficient reserved fiat to unreserve for {client_id}: "
+                f"reserved={acct.reserved}, requested={amount}"
+            )
+        acct.reserved -= amount
+        acct.available += amount
+        self._record("UNRESERVE", client_id, amount)
+
     def consume_reserved_for_mint(self, client_id: str, amount: int) -> None:
         """After successful mint, reserved fiat is consumed (still at bank, now tokenized)."""
         acct = self.get(client_id)
@@ -67,6 +80,36 @@ class FiatLedger:
         acct = self.get(client_id)
         acct.available += amount
         self._record("CREDIT_AVAILABLE", client_id, amount)
+
+    def debit_available(self, client_id: str, amount: int) -> None:
+        """Compensation: reverse a credit_available."""
+        acct = self.get(client_id)
+        if acct.available < amount:
+            raise ValueError(
+                f"Insufficient available fiat to debit for {client_id}: "
+                f"available={acct.available}, requested={amount}"
+            )
+        acct.available -= amount
+        self._record("DEBIT_AVAILABLE", client_id, amount)
+
+    def register_transaction(self, record: TransactionRecord) -> None:
+        self._transactions[record.idempotency_key] = record
+
+    def get_transaction(self, idempotency_key: str) -> TransactionRecord | None:
+        return self._transactions.get(idempotency_key)
+
+    def update_transaction_status(
+        self,
+        idempotency_key: str,
+        status: TransactionStatus,
+        error_message: str | None = None,
+    ) -> None:
+        record = self._transactions.get(idempotency_key)
+        if record is not None:
+            record.status = status
+            record.updated_at = __import__("datetime").datetime.utcnow()
+            if error_message is not None:
+                record.error_message = error_message
 
     def _record(self, event: str, client_id: str, amount: int) -> None:
         self._history.append(

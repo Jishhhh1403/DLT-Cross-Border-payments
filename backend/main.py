@@ -2,12 +2,14 @@
 FastAPI settlement API — institutional tokenized deposit POC.
 
 Endpoints mirror a production payment orchestration service:
-  reserve → mint → transfer → redeem
+  reserve -> mint -> transfer -> redeem
+
+Each endpoint requires an `Idempotency-Key` header for Saga safety.
 """
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Header, HTTPException
 
 from backend.app.blockchain.client import BesuClient
 from backend.app.fiat_ledger import FiatLedger
@@ -61,8 +63,11 @@ def health():
 
 
 @app.post("/reserve")
-def reserve(req: ReserveRequest):
-    """Off-chain: lock fiat from available → reserved."""
+def reserve(
+    req: ReserveRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    req.idempotency_key = idempotency_key
     try:
         return _orch().reserve(req)
     except ValueError as e:
@@ -70,8 +75,11 @@ def reserve(req: ReserveRequest):
 
 
 @app.post("/mint")
-def mint(req: MintRequest):
-    """On-chain: mint deposit tokens after fiat reserved."""
+def mint(
+    req: MintRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    req.idempotency_key = idempotency_key
     try:
         return _orch().mint(req)
     except ValueError as e:
@@ -79,8 +87,11 @@ def mint(req: MintRequest):
 
 
 @app.post("/transfer")
-def transfer(req: TransferRequest):
-    """On-chain: transfer tokens between institutional wallets."""
+def transfer(
+    req: TransferRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    req.idempotency_key = idempotency_key
     try:
         return _orch().transfer(req)
     except Exception as e:
@@ -88,8 +99,11 @@ def transfer(req: TransferRequest):
 
 
 @app.post("/redeem")
-def redeem(req: RedeemRequest):
-    """On-chain burn + off-chain fiat credit."""
+def redeem(
+    req: RedeemRequest,
+    idempotency_key: str = Header(..., alias="Idempotency-Key"),
+):
+    req.idempotency_key = idempotency_key
     try:
         return _orch().redeem(req)
     except Exception as e:
@@ -98,5 +112,4 @@ def redeem(req: RedeemRequest):
 
 @app.get("/balances")
 def balances():
-    """Fiat + on-chain token balances with full observability."""
     return _orch().balances()

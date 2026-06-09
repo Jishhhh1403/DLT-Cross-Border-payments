@@ -1,9 +1,13 @@
 __pycache__/
 *.py[cod]
 .env
+.env.local
 .venv/
 venv/
 deployed/contract_address.txt
 besu-data/
 *.egg-info/
 .pytest_cache/
+besu/config/keys/validator.key
+contracts/node_modules/
+contracts/build/

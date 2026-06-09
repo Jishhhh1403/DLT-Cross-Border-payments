@@ -2,11 +2,12 @@
 web3.py integration with Hyperledger Besu.
 
 Encapsulates contract deployment, mint, transfer, burn, and receipt parsing.
+ABI is always loaded from the compiled JSON artifact.
 """
 
 from __future__ import annotations
 
-import os
+import json
 from pathlib import Path
 from typing import Any
 
@@ -18,94 +19,20 @@ from web3.types import TxReceipt
 
 from backend.app.config import settings
 
-DEPOSIT_TOKEN_ABI: list[dict[str, Any]] = [
-    {
-        "inputs": [{"internalType": "address", "name": "initialBankOperator", "type": "address"}],
-        "stateMutability": "nonpayable",
-        "type": "constructor",
-    },
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "internalType": "address", "name": "from", "type": "address"},
-            {"indexed": True, "internalType": "address", "name": "to", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "value", "type": "uint256"},
-        ],
-        "name": "Transfer",
-        "type": "event",
-    },
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "internalType": "address", "name": "to", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"},
-            {"indexed": True, "internalType": "address", "name": "operator", "type": "address"},
-        ],
-        "name": "Mint",
-        "type": "event",
-    },
-    {
-        "anonymous": False,
-        "inputs": [
-            {"indexed": True, "internalType": "address", "name": "from", "type": "address"},
-            {"indexed": False, "internalType": "uint256", "name": "amount", "type": "uint256"},
-            {"indexed": True, "internalType": "address", "name": "operator", "type": "address"},
-        ],
-        "name": "Burn",
-        "type": "event",
-    },
-    {
-        "inputs": [{"internalType": "address", "name": "account", "type": "address"}],
-        "name": "balanceOf",
-        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-    {
-        "inputs": [
-            {"internalType": "address", "name": "to", "type": "address"},
-            {"internalType": "uint256", "name": "amount", "type": "uint256"},
-        ],
-        "name": "mint",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-    {
-        "inputs": [
-            {"internalType": "address", "name": "from", "type": "address"},
-            {"internalType": "uint256", "name": "amount", "type": "uint256"},
-        ],
-        "name": "burn",
-        "outputs": [],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-    {
-        "inputs": [
-            {"internalType": "address", "name": "to", "type": "address"},
-            {"internalType": "uint256", "name": "amount", "type": "uint256"},
-        ],
-        "name": "transfer",
-        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
-        "stateMutability": "nonpayable",
-        "type": "function",
-    },
-    {
-        "inputs": [],
-        "name": "totalSupply",
-        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-    {
-        "inputs": [],
-        "name": "decimals",
-        "outputs": [{"internalType": "uint8", "name": "", "type": "uint8"}],
-        "stateMutability": "view",
-        "type": "function",
-    },
-]
+
+def _load_artifact() -> tuple[list[dict[str, Any]], str]:
+    artifact_paths = (
+        Path(settings.contracts_dir) / "build" / "DepositToken.json",
+        Path("/app/contracts/build/DepositToken.json"),
+    )
+    for path in artifact_paths:
+        if path.exists():
+            data = json.loads(path.read_text(encoding="utf-8"))
+            return data["abi"], data["bin"]
+    raise RuntimeError(
+        "Missing contract artifact contracts/build/DepositToken.json. "
+        "Run: python scripts/compile_contract.py"
+    )
 
 
 class BesuClient:
@@ -118,9 +45,9 @@ class BesuClient:
             "BOB": Web3.to_checksum_address(settings.bob_onchain_address),
         }
         self._contract: Contract | None = None
+        self._abi, self._bytecode = _load_artifact()
 
     def _fee_fields(self) -> dict[str, int]:
-        # Use EIP-1559 fee fields so txs remain valid when baseFee > 0.
         base = int(self.w3.eth.gas_price)
         priority = max(1, base // 10)
         return {
@@ -143,13 +70,12 @@ class BesuClient:
                     self._bind_contract(address)
                     return address
             except Exception:
-                # If address is invalid or chain has been reset, redeploy below.
                 pass
         return self.deploy_contract()
 
     def _bind_contract(self, address: str) -> None:
         checksum = Web3.to_checksum_address(address)
-        self._contract = self.w3.eth.contract(address=checksum, abi=DEPOSIT_TOKEN_ABI)
+        self._contract = self.w3.eth.contract(address=checksum, abi=self._abi)
 
     @property
     def contract(self) -> Contract:
@@ -157,32 +83,15 @@ class BesuClient:
             raise RuntimeError("Contract not loaded — deploy first")
         return self._contract
 
-    def compile_contract(self) -> tuple[list[dict[str, Any]], str]:
-        artifact_paths = (
-            Path(settings.contracts_dir) / "build" / "DepositToken.json",
-            Path("/app/contracts/build/DepositToken.json"),
-        )
-        for path in artifact_paths:
-            if path.exists():
-                import json
-
-                data = json.loads(path.read_text(encoding="utf-8"))
-                return data["abi"], data["bin"]
-        raise RuntimeError(
-            "Missing contract artifact contracts/build/DepositToken.json. "
-            "Run: python scripts/compile_contract.py"
-        )
-
     def deploy_contract(self) -> str:
-        abi, bytecode = self.compile_contract()
-        ContractFactory = self.w3.eth.contract(abi=abi, bytecode=bytecode)
+        ContractFactory = self.w3.eth.contract(abi=self._abi, bytecode=self._bytecode)
         bank_address = self.bank_account.address
 
         tx = ContractFactory.constructor(bank_address).build_transaction(
             {
                 "from": bank_address,
                 "nonce": self.w3.eth.get_transaction_count(bank_address),
-                "gas": 12_000_000,
+                "gas": 15_000_000,
                 "chainId": settings.chain_id,
                 **self._fee_fields(),
             }
@@ -200,8 +109,6 @@ class BesuClient:
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text(address)
 
-        global DEPOSIT_TOKEN_ABI
-        DEPOSIT_TOKEN_ABI = abi
         self._bind_contract(address)
         return address
 
@@ -254,11 +161,7 @@ class BesuClient:
         return self._send_bank_tx(self.contract.functions.burn(from_addr, amount))
 
     def transfer_tokens(self, from_client: str, to_client: str, amount: int) -> TxReceipt:
-        # POC: Alice signs her own transfer (institutional HSM would sign in production)
-        from_key = os.getenv(
-            f"{from_client.upper()}_PRIVATE_KEY",
-            "0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78627d",  # Alice dev key
-        )
+        from_key = settings.alice_private_key
         to_addr = self.client_addresses[to_client.upper()]
         return self._send_client_tx(
             from_key,
@@ -271,6 +174,28 @@ class BesuClient:
 
     def total_supply(self) -> int:
         return int(self.contract.functions.totalSupply().call())
+
+    def grant_role(self, role_bytes32: bytes, account: str) -> TxReceipt:
+        checksum = Web3.to_checksum_address(account)
+        return self._send_bank_tx(
+            self.contract.functions.grantRole(role_bytes32, checksum)
+        )
+
+    def revoke_role(self, role_bytes32: bytes, account: str) -> TxReceipt:
+        checksum = Web3.to_checksum_address(account)
+        return self._send_bank_tx(
+            self.contract.functions.revokeRole(role_bytes32, checksum)
+        )
+
+    def has_role(self, role_bytes32: bytes, account: str) -> bool:
+        checksum = Web3.to_checksum_address(account)
+        return bool(self.contract.functions.hasRole(role_bytes32, checksum).call())
+
+    def pause_contract(self) -> TxReceipt:
+        return self._send_bank_tx(self.contract.functions.pause())
+
+    def unpause_contract(self) -> TxReceipt:
+        return self._send_bank_tx(self.contract.functions.unpause())
 
     def parse_receipt_logs(self, receipt: TxReceipt) -> list[dict[str, Any]]:
         logs: list[dict[str, Any]] = []

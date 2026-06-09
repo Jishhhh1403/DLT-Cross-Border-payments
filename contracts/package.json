@@ -1,0 +1,8 @@
+{
+  "name": "tokenized-deposit-contracts",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@openzeppelin/contracts": "^5.2.0"
+  }
+}
