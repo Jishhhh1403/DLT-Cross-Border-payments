@@ -13,25 +13,31 @@ If you don't provide one, a unique ID is automatically created for each request.
 from contextlib import asynccontextmanager
 from uuid import uuid4
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import FastAPI, Header, HTTPException, Depends
 
 from backend.app.blockchain.client import BesuClient
+from backend.app.database import get_session, init_db
 from backend.app.fiat_ledger import FiatLedger
 from backend.app.models import MintRequest, RedeemRequest, ReserveRequest, TransferRequest
 from backend.app.settlement import SettlementOrchestrator
 
 
 # Create the main components our app needs to work:
-# 1. A ledger to track real-world money (fiat currency like USD).
-# 2. A connection to the blockchain (Besu) for digital tokens.
-# 3. An orchestrator that coordinates between the two.
-fiat_ledger = FiatLedger()
+# 1. A connection to the blockchain (Besu).
 besu_client = BesuClient()
+# The orchestrator is now created per-request because it depends on a DB session.
 orchestrator: SettlementOrchestrator | None = None
 
 
+def get_db():
+    db = get_session()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
 # This runs when the server starts up.
-# It checks the blockchain is reachable, loads the smart contract, and gets everything ready.
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global orchestrator
@@ -39,13 +45,16 @@ async def lifespan(app: FastAPI):
         raise RuntimeError(
             f"Cannot connect to Besu at {besu_client.w3.provider.endpoint_uri}"
         )
+    init_db()
+    from backend.app.database import seed_db, load_wallets
+    seed_db()
+    wallets = load_wallets()
+    besu_client.load_wallets(wallets)
     besu_client.load_or_deploy_contract()
-    orchestrator = SettlementOrchestrator(fiat_ledger, besu_client)
     yield
 
 
 # Set up the web API with a name and description.
-# This tells anyone who visits what this service does.
 app = FastAPI(
     title="Tokenized Deposit Settlement POC",
     description=(
@@ -57,24 +66,19 @@ app = FastAPI(
 )
 
 
-# Get the orchestrator — the brain that coordinates all the steps.
-# If it's not ready yet, return an error.
-def _orch() -> SettlementOrchestrator:
-    if orchestrator is None:
-        raise HTTPException(503, "Settlement engine not initialized")
-    return orchestrator
+# Helper to create the orchestrator with the current database session.
+def _get_orchestrator(db=Depends(get_db)) -> SettlementOrchestrator:
+    return SettlementOrchestrator(FiatLedger(db), besu_client)
 
 
 # Make sure we have a unique ID for each request.
-# This helps prevent the same request from being processed twice by accident.
 def _resolve_key(req, header: str | None) -> str:
     return header or req.idempotency_key or str(uuid4())
 
 
 # A simple health-check endpoint.
-# Like a doctor checking your pulse — tells other systems if this server is alive and well.
 @app.get("/health")
-def health():
+def health(db=Depends(get_db)):
     return {
         "status": "ok",
         "besu_connected": besu_client.connected,
@@ -85,66 +89,62 @@ def health():
 
 
 # Step 1: Reserve money (fiat).
-# A customer tells the bank "I want to set aside $100 from my account for tokenization."
-# This only touches the bank's internal ledger — no blockchain involved yet.
 @app.post("/reserve")
 def reserve(
     req: ReserveRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    orch=Depends(_get_orchestrator),
 ):
     req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
-        return _orch().reserve(req)
+        return orch.reserve(req)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
 
 # Step 2: Mint deposit tokens.
-# The bank converts the reserved fiat money into digital deposit tokens on the blockchain.
-# Now the customer has digital tokens that represent their real money.
 @app.post("/mint")
 def mint(
     req: MintRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    orch=Depends(_get_orchestrator),
 ):
     req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
-        return _orch().mint(req)
+        return orch.mint(req)
     except ValueError as e:
         raise HTTPException(400, str(e)) from e
 
 
 # Step 3: Transfer tokens from one person to another.
-# Alice sends her digital deposit tokens to Bob on the blockchain.
-# This is like a digital wire transfer but using tokens instead of traditional money.
 @app.post("/transfer")
 def transfer(
     req: TransferRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    orch=Depends(_get_orchestrator),
 ):
     req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
-        return _orch().transfer(req)
+        return orch.transfer(req)
     except Exception as e:
         raise HTTPException(400, str(e)) from e
 
 
 # Step 4: Redeem tokens back to real money.
-# Bob wants to cash out — the bank destroys (burns) the tokens and credits Bob's bank account.
-# This converts digital tokens back into real fiat currency.
 @app.post("/redeem")
 def redeem(
     req: RedeemRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    orch=Depends(_get_orchestrator),
 ):
     req.idempotency_key = _resolve_key(req, idempotency_key)
     try:
-        return _orch().redeem(req)
+        return orch.redeem(req)
     except Exception as e:
         raise HTTPException(400, str(e)) from e
 
 
-# Check everyone's balances — both their fiat (real money) and their tokens (digital money).
+# Check everyone's balances — both their fiat and their tokens.
 @app.get("/balances")
-def balances():
-    return _orch().balances()
+def balances(orch=Depends(_get_orchestrator)):
+    return orch.balances()

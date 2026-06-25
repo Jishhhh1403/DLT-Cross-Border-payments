@@ -51,13 +51,34 @@ services:
       - ./deployed:/app/deployed
       - ./contracts:/app/contracts:ro
     depends_on:
-      - besu
+      db:
+        condition: service_healthy
+      besu:
+        condition: service_started
     restart: on-failure
+    networks:
+      - settlement-net
+
+  db:
+    image: postgres:16-alpine
+    container_name: settlement-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fiat_ledger
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     networks:
       - settlement-net
 
 volumes:
   besu-data:
+  pgdata:
 
 networks:
   settlement-net:

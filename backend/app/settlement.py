@@ -52,19 +52,14 @@ class SettlementOrchestrator:
         self.fiat = fiat    # The bank's internal ledger (real money)
         self.chain = chain  # The blockchain connection (digital tokens)
 
-    # Take a snapshot of everyone's token balances on the blockchain.
     def _token_snapshot(self) -> list[TokenAccountState]:
         return [
             TokenAccountState(
-                client_id="ALICE",
-                onchain_address=self.chain.client_addresses["ALICE"],
-                balance=self.chain.token_balance("ALICE"),
-            ),
-            TokenAccountState(
-                client_id="BOB",
-                onchain_address=self.chain.client_addresses["BOB"],
-                balance=self.chain.token_balance("BOB"),
-            ),
+                client_id=cid,
+                onchain_address=addr,
+                balance=self.chain.token_balance(cid),
+            )
+            for cid, addr in self.chain.client_addresses.items()
         ]
 
     # Take a complete picture of both fiat and token balances.

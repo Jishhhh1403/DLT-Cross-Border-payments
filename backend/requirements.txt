@@ -6,3 +6,7 @@ pydantic-settings==2.6.1
 py-solc-x==2.0.3
 eth-account==0.13.4
 httpx==0.28.1
+sqlalchemy==2.0.35
+psycopg2-binary==2.9.9
+pytest==8.3.4
+pytest-asyncio==0.24.0

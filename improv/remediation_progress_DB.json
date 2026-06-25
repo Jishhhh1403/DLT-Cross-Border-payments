@@ -1,0 +1,74 @@
+
+{
+  "project": "Tokenized Deposit Settlement POC",
+  "remediation_cycle": "Post-Brutal-Review-Phase-1",
+  "planned_changes": {
+    "smart_contracts": [
+      "Update decimals to 18 for ERC-20 standard compliance",
+      "Implement strict IERC20 interface inheritance",
+      "Replace single bankOperator with Multi-Sig/Governance control",
+      "Optimize gas for minting/burning"
+    ],
+    "backend_infrastructure": [
+      "Replace in-memory storage with PostgreSQL persistence",
+      "Implement ACID transactions for fiat ledger",
+      "Implement row-level locking to prevent race conditions/double-spending",
+      "Introduce a Nonce Manager for blockchain transactions",
+      "Remove hardcoded client mappings in BesuClient"
+    ],
+    "orchestration": [
+      "Transition from simple try-except Saga to persistent state machine (e.g., Temporal or Celery)",
+      "Implement a persistent message broker for guaranteed compensation"
+    ],
+    "testing": [
+      "Add integration tests using a live Besu node",
+      "Implement adversarial testing (network partitions, node failures, gas exhaustion)"
+    ]
+  },
+  "changes_implemented": {
+    "persistence": {
+      "status": "COMPLETED",
+      "details": [
+        "Integrated PostgreSQL 16 via SQLAlchemy",
+        "Defined relational schema for Accounts, Transactions, and AuditLogs",
+        "Added PostgreSQL service to docker-compose.yml with healthchecks",
+        "Implemented database seeding for initial customer accounts (Alice, Bob)"
+      ]
+    },
+    "concurrency_control": {
+      "status": "COMPLETED",
+      "details": [
+        "Implemented SELECT FOR UPDATE row-level locking in FiatLedger to prevent race conditions during balance updates"
+      ]
+    },
+    "api_integration": {
+      "status": "COMPLETED",
+      "details": [
+        "Refactored FastAPI endpoints to use scoped database sessions via Dependencies",
+        "Updated lifecycle management to initialize and seed DB on startup"
+      ]
+    }
+  },
+  "pending_or_failed_changes": {
+    "smart_contracts": {
+      "status": "PENDING",
+      "reason": "Focus was on backend persistence first; contract changes require redeployment and state migration."
+    },
+    "nonce_management": {
+      "status": "PENDING",
+      "reason": "Not yet implemented; currently relies on sequential nonces which will fail under high concurrency."
+    },
+    "distributed_saga": {
+      "status": "PENDING",
+      "reason": "Requires introduction of additional infrastructure (Redis/RabbitMQ/Temporal) which exceeds the scope of the persistence update."
+    },
+    "integration_testing": {
+      "status": "PENDING",
+      "reason": "Testing suite currently relies on mocks; requires updated test environment to include the new DB service."
+    },
+    "client_mapping": {
+      "status": "PARTIAL",
+      "reason": "Fiat accounts are now in DB, but on-chain address mappings in BesuClient remain hardcoded."
+    }
+  }
+}

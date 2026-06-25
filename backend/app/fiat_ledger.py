@@ -1,110 +1,86 @@
 """
-Off-chain fiat treasury ledger with transaction registry for Saga idempotency.
+Off-chain fiat treasury ledger with PostgreSQL persistence.
 
-This is the bank's internal accounting book. It tracks real money (fiat) that exists
-in the bank's systems — NOT on the blockchain. In real banking, this would be the
-core banking system or general ledger that holds customer deposits.
-
-Institutional parallel:
-- Core banking / general ledger holds real money
-- Kinexys/Citi/Partior never put fiat ON the blockchain — only token claims
+This class now uses SQLAlchemy to interact with a PostgreSQL database.
+It uses SELECT FOR UPDATE (with_for_update) to ensure that account balances
+are locked during a transaction, preventing race conditions and double-spending.
 """
 
-from dataclasses import dataclass, field
+import json
+from sqlalchemy.orm import Session
+from sqlalchemy import select
 
+from backend.app.db_models import Account, Transaction, AuditLog
 from backend.app.models import FiatAccountState, TransactionRecord, TransactionStatus
 
 
-# A single customer's fiat account at the bank.
-# "available" is money you can use or withdraw.
-# "reserved" is money that's been set aside to be converted into digital tokens.
-@dataclass
-class FiatAccount:
-    client_id: str
-    available: int = 0   # Money that's free to use (like a checking account balance)
-    reserved: int = 0    # Money that's been earmarked for tokenization
-
-
-# The bank's ledger that tracks all customer fiat balances and transaction history.
-# This is like the bank's database of who has how much money.
 class FiatLedger:
-    def __init__(self) -> None:
-        # Set up the initial accounts: Alice starts with $1,000.00, Bob starts with $0.
-        # All amounts are in cents (100,000 cents = $1,000.00).
-        self._accounts: dict[str, FiatAccount] = {
-            "ALICE": FiatAccount(client_id="ALICE", available=100_000, reserved=0),
-            "BOB": FiatAccount(client_id="BOB", available=0, reserved=0),
-        }
-        # A log of every event that happened (like an audit trail).
-        self._history: list[dict] = []
-        # A registry of transactions keyed by their unique ID (for idempotency).
-        self._transactions: dict[str, TransactionRecord] = {}
+    def __init__(self, session: Session):
+        # We now receive a database session instead of managing state internally.
+        self.session = session
 
-    # Take a picture of everyone's fiat balances at this moment.
     def snapshot(self) -> list[FiatAccountState]:
+        # Read all accounts from the database.
+        accounts = self.session.execute(select(Account)).scalars().all()
         return [
             FiatAccountState(
                 client_id=a.client_id,
                 available=a.available,
                 reserved=a.reserved,
             )
-            for a in self._accounts.values()
+            for a in accounts
         ]
 
-    # Find a customer's account by their name (case-insensitive).
-    # Raises an error if the customer doesn't exist.
-    def get(self, client_id: str) -> FiatAccount:
+    def get(self, client_id: str, lock: bool = False) -> Account:
+        # Look up a customer account.
+        # If lock=True, we use SELECT FOR UPDATE to lock the row in the DB.
         key = client_id.upper()
-        if key not in self._accounts:
+        stmt = select(Account).where(Account.client_id == key)
+        if lock:
+            stmt = stmt.with_for_update()
+        
+        account = self.session.execute(stmt).scalar_one_or_none()
+        if account is None:
             raise KeyError(f"Unknown client: {client_id}")
-        return self._accounts[key]
+        return account
 
-    # Set money aside from a customer's available balance.
-    # Like the bank putting a hold on funds when you want to convert them to tokens.
     def reserve(self, client_id: str, amount: int) -> None:
-        acct = self.get(client_id)
+        # Lock the account row to prevent concurrent modifications.
+        acct = self.get(client_id, lock=True)
         if acct.available < amount:
             raise ValueError(
                 f"Insufficient available fiat for {client_id}: "
                 f"available={acct.available}, requested={amount}"
             )
-        acct.available -= amount   # Take money from available
-        acct.reserved += amount    # And mark it as reserved
+        acct.available -= amount
+        acct.reserved += amount
         self._record("RESERVE", client_id, amount)
 
-    # Undo a reservation — move reserved money back to available.
-    # This is a "compensation" action used when something goes wrong later in the process.
     def unreserve(self, client_id: str, amount: int) -> None:
-        acct = self.get(client_id)
+        acct = self.get(client_id, lock=True)
         if acct.reserved < amount:
             raise ValueError(
                 f"Insufficient reserved fiat to unreserve for {client_id}: "
                 f"reserved={acct.reserved}, requested={amount}"
             )
-        acct.reserved -= amount    # Release the hold
-        acct.available += amount   # Money is available again
+        acct.reserved -= amount
+        acct.available += amount
         self._record("UNRESERVE", client_id, amount)
 
-    # After tokens are successfully created on the blockchain, permanently remove the reserved money.
-    # The bank keeps this money — it's now represented by digital tokens instead.
     def consume_reserved_for_mint(self, client_id: str, amount: int) -> None:
-        acct = self.get(client_id)
+        acct = self.get(client_id, lock=True)
         if acct.reserved < amount:
             raise ValueError(f"Insufficient reserved fiat for {client_id}")
-        acct.reserved -= amount   # Remove the reserved money (it's now tokenized)
+        acct.reserved -= amount
         self._record("CONSUME_RESERVED_FOR_MINT", client_id, amount)
 
-    # Add money to a customer's available balance.
-    # Used when someone redeems tokens back to cash — the bank adds the fiat back.
     def credit_available(self, client_id: str, amount: int) -> None:
-        acct = self.get(client_id)
+        acct = self.get(client_id, lock=True)
         acct.available += amount
         self._record("CREDIT_AVAILABLE", client_id, amount)
 
-    # Remove money from a customer's available balance (reverse of credit).
-    # A compensation action used when the redeem process fails after crediting.
     def debit_available(self, client_id: str, amount: int) -> None:
-        acct = self.get(client_id)
+        acct = self.get(client_id, lock=True)
         if acct.available < amount:
             raise ValueError(
                 f"Insufficient available fiat to debit for {client_id}: "
@@ -113,40 +89,58 @@ class FiatLedger:
         acct.available -= amount
         self._record("DEBIT_AVAILABLE", client_id, amount)
 
-    # Save a transaction record so we can look it up later (for idempotency).
     def register_transaction(self, record: TransactionRecord) -> None:
-        self._transactions[record.idempotency_key] = record
+        # Convert the Pydantic model to a SQLAlchemy model.
+        db_record = Transaction(
+            idempotency_key=record.idempotency_key,
+            operation_type=record.operation_type,
+            status=record.status,
+            client_id=record.client_id,
+            to_client_id=record.to_client_id,
+            amount=record.amount,
+            error_message=record.error_message,
+        )
+        self.session.add(db_record)
+        # Flush to ensure it's in the DB but not yet committed.
+        self.session.flush()
 
-    # Look up a previous transaction by its unique key.
     def get_transaction(self, idempotency_key: str) -> TransactionRecord | None:
-        return self._transactions.get(idempotency_key)
+        # Retrieve transaction and convert back to Pydantic model for the orchestrator.
+        db_tx = self.session.get(Transaction, idempotency_key)
+        if db_tx is None:
+            return None
+        return TransactionRecord(
+            idempotency_key=db_tx.idempotency_key,
+            operation_type=db_tx.operation_type,
+            status=db_tx.status,
+            client_id=db_tx.client_id,
+            to_client_id=db_tx.to_client_id,
+            amount=db_tx.amount,
+            error_message=db_tx.error_message,
+        )
 
-    # Update the status of an existing transaction (e.g., from PENDING to COMPLETED).
     def update_transaction_status(
         self,
         idempotency_key: str,
         status: TransactionStatus,
         error_message: str | None = None,
     ) -> None:
-        record = self._transactions.get(idempotency_key)
-        if record is not None:
-            record.status = status
-            record.updated_at = __import__("datetime").datetime.utcnow()
+        db_tx = self.session.get(Transaction, idempotency_key)
+        if db_tx is not None:
+            db_tx.status = status
             if error_message is not None:
-                record.error_message = error_message
+                db_tx.error_message = error_message
 
-    # Log an event (internal helper for the audit trail).
     def _record(self, event: str, client_id: str, amount: int) -> None:
-        self._history.append(
-            {
-                "event": event,
-                "client_id": client_id.upper(),
-                "amount": amount,
-                "snapshot": self.snapshot(),
-            }
+        # Log to the AuditLog table.
+        # We take a snapshot of current accounts to store as JSON for the audit trail.
+        snapshot = self.snapshot()
+        snap_json = json.dumps([a.model_dump() for a in snapshot])
+        
+        log = AuditLog(
+            event=event,
+            client_id=client_id.upper(),
+            amount=amount,
+            snapshot_json=snap_json,
         )
-
-    # Get the full history of events (read-only, like an audit log).
-    @property
-    def history(self) -> list[dict]:
-        return list(self._history)
+        self.session.add(log)
