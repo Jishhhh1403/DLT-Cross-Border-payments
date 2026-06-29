@@ -26,7 +26,7 @@ def main() -> None:
         sys.exit(1)
     # Either load an existing contract or deploy a new one.
     address = client.load_or_deploy_contract()
-    bank_address = client.bank_account.address
+    bank_address = client.bank_address
 
     # Grant each required role to the bank if it doesn't already have it.
     roles = {

@@ -34,6 +34,7 @@ class BesuClient:
         self.w3 = Web3(Web3.HTTPProvider(settings.besu_rpc_url))
         self.w3.middleware_onion.inject(ExtraDataToPOAMiddleware, layer=0)
         self.bank_account = Account.from_key(settings.bank_private_key)
+        self.bank_address = Web3.to_checksum_address(self.bank_account.address)
         self.client_addresses: dict[str, str] = {}
         self._contract: Contract | None = None
         self._abi, self._bytecode = _load_artifact()
@@ -82,12 +83,11 @@ class BesuClient:
 
     def deploy_contract(self) -> str:
         ContractFactory = self.w3.eth.contract(abi=self._abi, bytecode=self._bytecode)
-        bank_address = self.bank_account.address
 
-        tx = ContractFactory.constructor(bank_address).build_transaction(
+        tx = ContractFactory.constructor(self.bank_address).build_transaction(
             {
-                "from": bank_address,
-                "nonce": self._nonces.get_nonce(bank_address),
+                "from": self.bank_address,
+                "nonce": self._nonces.get_nonce(self.bank_address),
                 "gas": 15_000_000,
                 "chainId": settings.chain_id,
                 **self._fee_fields(),
@@ -110,11 +110,10 @@ class BesuClient:
         return address
 
     def _send_bank_tx(self, fn) -> TxReceipt:
-        bank_address = self.bank_account.address
         tx = fn.build_transaction(
             {
-                "from": bank_address,
-                "nonce": self._nonces.get_nonce(bank_address),
+                "from": self.bank_address,
+                "nonce": self._nonces.get_nonce(self.bank_address),
                 "gas": 500_000,
                 "chainId": settings.chain_id,
                 **self._fee_fields(),
@@ -131,10 +130,11 @@ class BesuClient:
 
     def _send_client_tx(self, private_key: str, fn) -> TxReceipt:
         account = Account.from_key(private_key)
+        client_address = Web3.to_checksum_address(account.address)
         tx = fn.build_transaction(
             {
-                "from": account.address,
-                "nonce": self._nonces.get_nonce(account.address),
+                "from": client_address,
+                "nonce": self._nonces.get_nonce(client_address),
                 "gas": 300_000,
                 "chainId": settings.chain_id,
                 **self._fee_fields(),

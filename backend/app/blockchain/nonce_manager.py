@@ -9,18 +9,18 @@ class NonceManager:
         self._local_nonces: dict[str, int] = {}
 
     def get_nonce(self, address: str) -> int:
-        address = address.lower()
+        key = address.lower()
         with self._lock:
             onchain = self.w3.eth.get_transaction_count(address)
-            local = self._local_nonces.get(address, -1)
+            local = self._local_nonces.get(key, -1)
             nonce = max(onchain, local + 1)
-            self._local_nonces[address] = nonce
+            self._local_nonces[key] = nonce
             return nonce
 
     def reset(self, address: str):
-        address = address.lower()
+        key = address.lower()
         with self._lock:
-            self._local_nonces.pop(address, None)
+            self._local_nonces.pop(key, None)
 
     def reset_all(self):
         with self._lock:
